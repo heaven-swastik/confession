@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "506310085554",
+    "firebase_url": "https://confession-fd9ea-default-rtdb.firebaseio.com",
+    "project_id": "confession-fd9ea",
+    "storage_bucket": "confession-fd9ea.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:506310085554:android:4d23328a12dc80912bf2ab",
+        "android_client_info": {
+          "package_name": "com.confession.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCgcesDTXz4djZqX7QrA_9f_r9Mm-7_oKs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
