@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:local_auth/local_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../theme/app_theme.dart';
 
@@ -13,14 +12,12 @@ class LockScreen extends StatefulWidget {
 }
 
 class _LockScreenState extends State<LockScreen> with TickerProviderStateMixin {
-  final LocalAuthentication _localAuth = LocalAuthentication();
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
-  
+
   String _enteredPin = '';
   String? _savedPin;
   bool _isSettingUp = false;
   String _setupPin = '';
-  bool _canUseBiometrics = false;
   late AnimationController _shakeController;
 
   @override
@@ -31,7 +28,6 @@ class _LockScreenState extends State<LockScreen> with TickerProviderStateMixin {
       vsync: this,
     );
     _checkPinSetup();
-    _checkBiometrics();
   }
 
   @override
@@ -46,90 +42,45 @@ class _LockScreenState extends State<LockScreen> with TickerProviderStateMixin {
       _savedPin = pin;
       _isSettingUp = pin == null;
     });
-
-    if (!_isSettingUp && _canUseBiometrics) {
-      _authenticateWithBiometrics();
-    }
-  }
-
-  Future<void> _checkBiometrics() async {
-    try {
-      final canCheck = await _localAuth.canCheckBiometrics;
-      final isDeviceSupported = await _localAuth.isDeviceSupported();
-      setState(() {
-        _canUseBiometrics = canCheck && isDeviceSupported;
-      });
-    } catch (e) {
-      setState(() {
-        _canUseBiometrics = false;
-      });
-    }
-  }
-
-  Future<void> _authenticateWithBiometrics() async {
-    try {
-      final authenticated = await _localAuth.authenticate(
-        localizedReason: 'Authenticate to access Confession',
-        options: const AuthenticationOptions(
-          stickyAuth: true,
-          biometricOnly: false,
-        ),
-      );
-
-      if (authenticated) {
-        widget.onUnlocked();
-      }
-    } catch (e) {
-      debugPrint('Biometric authentication error: $e');
-    }
   }
 
   void _onNumberTap(String number) {
-    if (_isSettingUp) {
-      if (_setupPin.isEmpty) {
-        setState(() {
-          _enteredPin += number;
-          if (_enteredPin.length == 4) {
-            _setupPin = _enteredPin;
-            _enteredPin = '';
-          }
-        });
-      } else {
-        setState(() {
-          _enteredPin += number;
-          if (_enteredPin.length == 4) {
-            if (_enteredPin == _setupPin) {
-              _savePin(_enteredPin);
-            } else {
-              _shakeAnimation();
-              _enteredPin = '';
-              _setupPin = '';
-              _showError('PINs don\'t match. Please try again.');
-            }
-          }
-        });
-      }
-    } else {
-      setState(() {
-        _enteredPin += number;
-        if (_enteredPin.length == 4) {
-          if (_enteredPin == _savedPin) {
-            widget.onUnlocked();
+    if (_enteredPin.length >= 4) return;
+
+    setState(() {
+      _enteredPin += number;
+    });
+
+    if (_enteredPin.length == 4) {
+      if (_isSettingUp) {
+        if (_setupPin.isEmpty) {
+          _setupPin = _enteredPin;
+          _enteredPin = '';
+        } else {
+          if (_enteredPin == _setupPin) {
+            _savePin(_enteredPin);
           } else {
             _shakeAnimation();
+            _showError("PINs don't match. Try again.");
             _enteredPin = '';
-            _showError('Incorrect PIN');
+            _setupPin = '';
           }
         }
-      });
+      } else {
+        if (_enteredPin == _savedPin) {
+          widget.onUnlocked();
+        } else {
+          _shakeAnimation();
+          _showError("Incorrect PIN");
+          _enteredPin = '';
+        }
+      }
     }
   }
 
   void _onBackspace() {
     if (_enteredPin.isNotEmpty) {
-      setState(() {
-        _enteredPin = _enteredPin.substring(0, _enteredPin.length - 1);
-      });
+      setState(() => _enteredPin = _enteredPin.substring(0, _enteredPin.length - 1));
     }
   }
 
@@ -155,90 +106,80 @@ class _LockScreenState extends State<LockScreen> with TickerProviderStateMixin {
         content: Text(message),
         backgroundColor: AppTheme.errorColor,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final screenHeight = MediaQuery.of(context).size.height;
+
     return Scaffold(
       backgroundColor: AppTheme.background,
       body: SafeArea(
-        child: Padding(
+        child: SingleChildScrollView(
+          reverse: true,
           padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Spacer(),
-              const Icon(
-                Icons.lock_outline,
-                size: 72,
-                color: AppTheme.accent,
-              ),
-              const SizedBox(height: 24),
-              Text(
-                _isSettingUp
-                    ? (_setupPin.isEmpty
-                        ? 'Create Your PIN'
-                        : 'Confirm Your PIN')
-                    : 'Enter PIN',
-                style: Theme.of(context).textTheme.displaySmall,
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                _isSettingUp
-                    ? 'Keep your confessions safe with a 4-digit PIN 🔒'
-                    : 'Welcome back',
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppTheme.textColor.withOpacity(0.6),
-                    ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 48),
-              AnimatedBuilder(
-                animation: _shakeController,
-                builder: (context, child) {
-                  final offset = _shakeController.value < 0.5
-                      ? _shakeController.value * 20
-                      : (1 - _shakeController.value) * 20;
-                  return Transform.translate(
-                    offset: Offset(offset, 0),
-                    child: child,
-                  );
-                },
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(
-                    4,
-                    (index) => Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 12),
-                      width: 20,
-                      height: 20,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: index < _enteredPin.length
-                            ? AppTheme.accent
-                            : AppTheme.accent.withOpacity(0.2),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: screenHeight - 48),
+            child: IntrinsicHeight(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Spacer(),
+                  const Icon(Icons.lock_outline, size: 72, color: AppTheme.accent),
+                  const SizedBox(height: 24),
+                  Text(
+                    _isSettingUp
+                        ? (_setupPin.isEmpty ? 'Create Your PIN' : 'Confirm Your PIN')
+                        : 'Enter PIN',
+                    style: Theme.of(context).textTheme.displaySmall,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _isSettingUp
+                        ? 'Keep your confessions safe with a 4-digit PIN 🔒'
+                        : 'Welcome back',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: AppTheme.textColor.withOpacity(0.6),
+                        ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 48),
+                  AnimatedBuilder(
+                    animation: _shakeController,
+                    builder: (context, child) {
+                      final offset = _shakeController.value < 0.5
+                          ? _shakeController.value * 20
+                          : (1 - _shakeController.value) * 20;
+                      return Transform.translate(offset: Offset(offset, 0), child: child);
+                    },
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List.generate(
+                        4,
+                        (index) => Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 12),
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: index < _enteredPin.length
+                                ? AppTheme.accent
+                                : AppTheme.accent.withOpacity(0.2),
+                          ),
+                        ),
                       ),
                     ),
                   ),
-                ),
+                  const SizedBox(height: 48),
+                  _buildNumberPad(),
+                  const Spacer(),
+                ],
               ),
-              const SizedBox(height: 64),
-              _buildNumberPad(),
-              const SizedBox(height: 24),
-              if (_canUseBiometrics && !_isSettingUp)
-                IconButton(
-                  onPressed: _authenticateWithBiometrics,
-                  icon: const Icon(Icons.fingerprint, size: 48),
-                  color: AppTheme.accent,
-                ),
-              const Spacer(),
-            ],
+            ),
           ),
         ),
       ),
@@ -262,9 +203,7 @@ class _LockScreenState extends State<LockScreen> with TickerProviderStateMixin {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: numbers.map((number) {
-          if (number.isEmpty) {
-            return const SizedBox(width: 80, height: 80);
-          }
+          if (number.isEmpty) return const SizedBox(width: 80, height: 80);
           if (number == 'backspace') {
             return _buildNumberButton(
               onTap: _onBackspace,
@@ -273,20 +212,14 @@ class _LockScreenState extends State<LockScreen> with TickerProviderStateMixin {
           }
           return _buildNumberButton(
             onTap: () => _onNumberTap(number),
-            child: Text(
-              number,
-              style: Theme.of(context).textTheme.displaySmall,
-            ),
+            child: Text(number, style: Theme.of(context).textTheme.displaySmall),
           );
         }).toList(),
       ),
     );
   }
 
-  Widget _buildNumberButton({
-    required VoidCallback onTap,
-    required Widget child,
-  }) {
+  Widget _buildNumberButton({required VoidCallback onTap, required Widget child}) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12.0),
       child: Material(
@@ -295,12 +228,7 @@ class _LockScreenState extends State<LockScreen> with TickerProviderStateMixin {
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(40),
-          child: Container(
-            width: 80,
-            height: 80,
-            alignment: Alignment.center,
-            child: child,
-          ),
+          child: Container(width: 80, height: 80, alignment: Alignment.center, child: child),
         ),
       ),
     );

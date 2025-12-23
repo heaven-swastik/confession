@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
-import '../widgets/custom_button.dart';
-import '../utils/validators.dart';
+import '../theme/app_theme.dart';
 import 'chat_screen.dart';
 
 class JoinRoomScreen extends StatefulWidget {
@@ -18,7 +16,7 @@ class _JoinRoomScreenState extends State<JoinRoomScreen> {
   final _formKey = GlobalKey<FormState>();
   final _roomIdController = TextEditingController();
   final _secretWordController = TextEditingController();
-  bool _isJoining = false;
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -28,151 +26,156 @@ class _JoinRoomScreenState extends State<JoinRoomScreen> {
   }
 
   Future<void> _joinRoom() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() {
-      _isJoining = true;
+      _isLoading = true;
     });
 
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final firestoreService = Provider.of<FirestoreService>(context, listen: false);
-    final userId = authService.user?.uid;
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      final firestoreService = Provider.of<FirestoreService>(context, listen: false);
+      
+      final userId = authService.user?.uid;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
 
-    if (userId == null) {
-      _showError('Please sign in first');
-      setState(() {
-        _isJoining = false;
-      });
-      return;
-    }
-
-    final roomId = _roomIdController.text.trim().toLowerCase();
-    final secretWord = _secretWordController.text.trim();
-
-    final room = await firestoreService.joinRoom(
-      roomId: roomId,
-      secretWord: secretWord,
-      userId: userId,
-    );
-
-    setState(() {
-      _isJoining = false;
-    });
-
-    if (room != null && mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) => ChatScreen(roomId: roomId),
-        ),
+      final room = await firestoreService.joinRoom(
+        roomId: _roomIdController.text.trim(),
+        secretWord: _secretWordController.text.trim(),
+        userId: userId,
       );
-    } else {
-      _showError('Unable to join room. Please check:\n• Room ID is correct\n• Secret word matches exactly\n• Room exists');
-    }
-  }
 
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppTheme.errorColor,
-      ),
-    );
+      if (room != null && mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatScreen(room: room),
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Invalid Room ID or Secret Word'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.background,
       appBar: AppBar(
+        backgroundColor: AppTheme.accent,
+        foregroundColor: Colors.white,
         title: const Text('Join Room'),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(24),
         child: Form(
           key: _formKey,
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: AppTheme.accent2.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.login, color: AppTheme.accent2),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Enter the room details shared with you',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  ],
-                ),
+              const Icon(
+                Icons.login,
+                size: 80,
+                color: AppTheme.accent,
               ),
               const SizedBox(height: 32),
-              Text(
-                'Room ID',
-                style: Theme.of(context).textTheme.titleLarge,
+              const Text(
+                'Join a Room',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 8),
-              Text(
-                'The unique room identifier',
-                style: Theme.of(context).textTheme.bodySmall,
+              const Text(
+                'Enter the Room ID and Secret Word',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 32),
               TextFormField(
                 controller: _roomIdController,
-                decoration: const InputDecoration(
-                  hintText: 'Enter room ID',
-                  prefixIcon: Icon(Icons.tag),
+                decoration: InputDecoration(
+                  labelText: 'Room ID',
+                  prefixIcon: const Icon(Icons.tag),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
-                validator: Validators.validateRoomId,
-                autocorrect: false,
-                enableSuggestions: false,
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Secret Word',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'The password for this room',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _secretWordController,
-                decoration: const InputDecoration(
-                  hintText: 'Enter secret word',
-                  prefixIcon: Icon(Icons.key),
-                ),
-                validator: Validators.validateSecretWord,
-                obscureText: true,
-              ),
-              const SizedBox(height: 48),
-              SizedBox(
-                width: double.infinity,
-                child: CustomButton(
-                  text: _isJoining ? 'Joining...' : 'Join Room',
-                  icon: Icons.login,
-                  backgroundColor: AppTheme.accent2,
-                  onPressed: _isJoining ? null : _joinRoom,
-                ),
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter Room ID';
+                  }
+                  return null;
+                },
               ),
               const SizedBox(height: 16),
-              Center(
-                child: Text(
-                  '🔒 Your identity stays anonymous',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppTheme.textColor.withOpacity(0.6),
-                      ),
+              TextFormField(
+                controller: _secretWordController,
+                decoration: InputDecoration(
+                  labelText: 'Secret Word',
+                  prefixIcon: const Icon(Icons.lock),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
+                obscureText: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter Secret Word';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _joinRoom,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accent,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Text(
+                        'Join Room',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
               ),
             ],
           ),

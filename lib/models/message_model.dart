@@ -7,6 +7,11 @@ class MessageModel {
   final MessageType type;
   final String? reactionEmoji;
   final String? stickerUrl;
+  final String? voiceNoteUrl;
+  final int? voiceNoteDuration; // in seconds
+  final String? spotifyTrackUri;
+  final String? spotifyTrackName;
+  final String? spotifyArtistName;
 
   MessageModel({
     required this.messageId,
@@ -17,6 +22,11 @@ class MessageModel {
     this.type = MessageType.text,
     this.reactionEmoji,
     this.stickerUrl,
+    this.voiceNoteUrl,
+    this.voiceNoteDuration,
+    this.spotifyTrackUri,
+    this.spotifyTrackName,
+    this.spotifyArtistName,
   });
 
   factory MessageModel.fromMap(Map<String, dynamic> map, String messageId) {
@@ -32,6 +42,11 @@ class MessageModel {
       ),
       reactionEmoji: map['reactionEmoji'],
       stickerUrl: map['stickerUrl'],
+      voiceNoteUrl: map['voiceNoteUrl'],
+      voiceNoteDuration: map['voiceNoteDuration'],
+      spotifyTrackUri: map['spotifyTrackUri'],
+      spotifyTrackName: map['spotifyTrackName'],
+      spotifyArtistName: map['spotifyArtistName'],
     );
   }
 
@@ -44,6 +59,11 @@ class MessageModel {
       'type': type.toString().split('.').last,
       'reactionEmoji': reactionEmoji,
       'stickerUrl': stickerUrl,
+      'voiceNoteUrl': voiceNoteUrl,
+      'voiceNoteDuration': voiceNoteDuration,
+      'spotifyTrackUri': spotifyTrackUri,
+      'spotifyTrackName': spotifyTrackName,
+      'spotifyArtistName': spotifyArtistName,
     };
   }
 
@@ -56,6 +76,11 @@ class MessageModel {
     MessageType? type,
     String? reactionEmoji,
     String? stickerUrl,
+    String? voiceNoteUrl,
+    int? voiceNoteDuration,
+    String? spotifyTrackUri,
+    String? spotifyTrackName,
+    String? spotifyArtistName,
   }) {
     return MessageModel(
       messageId: messageId ?? this.messageId,
@@ -66,6 +91,11 @@ class MessageModel {
       type: type ?? this.type,
       reactionEmoji: reactionEmoji ?? this.reactionEmoji,
       stickerUrl: stickerUrl ?? this.stickerUrl,
+      voiceNoteUrl: voiceNoteUrl ?? this.voiceNoteUrl,
+      voiceNoteDuration: voiceNoteDuration ?? this.voiceNoteDuration,
+      spotifyTrackUri: spotifyTrackUri ?? this.spotifyTrackUri,
+      spotifyTrackName: spotifyTrackName ?? this.spotifyTrackName,
+      spotifyArtistName: spotifyArtistName ?? this.spotifyArtistName,
     );
   }
 }
@@ -74,4 +104,6 @@ enum MessageType {
   text,
   sticker,
   icebreaker,
+  voiceNote,
+  spotifyTrack,
 }

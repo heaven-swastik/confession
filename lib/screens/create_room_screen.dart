@@ -2,12 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
-import 'package:share_plus/share_plus.dart';
-import '../theme/app_theme.dart';
 import '../services/auth_service.dart';
 import '../services/firestore_service.dart';
-import '../widgets/custom_button.dart';
-import '../utils/validators.dart';
+import '../theme/app_theme.dart';
 import 'chat_screen.dart';
 
 class CreateRoomScreen extends StatefulWidget {
@@ -19,70 +16,87 @@ class CreateRoomScreen extends StatefulWidget {
 
 class _CreateRoomScreenState extends State<CreateRoomScreen> {
   final _formKey = GlobalKey<FormState>();
+  final _roomNameController = TextEditingController();
   final _secretWordController = TextEditingController();
+  bool _isLoading = false;
   bool _disappearingMessages = false;
-  bool _isCreating = false;
 
   @override
   void dispose() {
+    _roomNameController.dispose();
     _secretWordController.dispose();
     super.dispose();
   }
 
   Future<void> _createRoom() async {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() {
-      _isCreating = true;
+      _isLoading = true;
     });
 
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final firestoreService = Provider.of<FirestoreService>(context, listen: false);
-    final userId = authService.user?.uid;
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      final firestoreService = Provider.of<FirestoreService>(context, listen: false);
+      
+      final userId = authService.user?.uid;
+      if (userId == null) {
+        throw Exception('User not authenticated');
+      }
 
-    if (userId == null) {
-      _showError('Please sign in first');
-      setState(() {
-        _isCreating = false;
-      });
-      return;
-    }
+      // Generate unique room ID
+      final roomId = const Uuid().v4().substring(0, 8);
 
-    final roomId = const Uuid().v4().substring(0, 8);
-    final secretWord = _secretWordController.text.trim();
+      final room = await firestoreService.createRoom(
+        roomId: roomId,
+        secretWord: _secretWordController.text.trim(),
+        creatorUid: userId,
+        disappearingMessages: _disappearingMessages,
+        roomName: _roomNameController.text.trim().isEmpty 
+            ? 'Room ${roomId.toUpperCase()}' 
+            : _roomNameController.text.trim(),
+      );
 
-    final room = await firestoreService.createRoom(
-      roomId: roomId,
-      secretWord: secretWord,
-      creatorUid: userId,
-      disappearingMessages: _disappearingMessages,
-    );
-
-    setState(() {
-      _isCreating = false;
-    });
-
-    if (room != null && mounted) {
-      _showSuccessDialog(roomId, secretWord);
-    } else {
-      _showError('Failed to create room');
+      if (room != null && mounted) {
+        // Show room details dialog
+        await _showRoomDetailsDialog(roomId, _secretWordController.text.trim());
+        
+        // Navigate to chat
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatScreen(room: room),
+            ),
+          );
+        }
+      } else {
+        throw Exception('Failed to create room');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
-  void _showSuccessDialog(String roomId, String secretWord) {
-    showDialog(
+  Future<void> _showRoomDetailsDialog(String roomId, String secretWord) async {
+    return showDialog(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(24),
-        ),
         title: const Row(
           children: [
-            Icon(Icons.check_circle, color: AppTheme.successColor),
-            SizedBox(width: 12),
+            Icon(Icons.check_circle, color: Colors.green),
+            SizedBox(width: 8),
             Text('Room Created!'),
           ],
         ),
@@ -91,20 +105,32 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Share these details with someone you trust:',
-              style: TextStyle(fontSize: 14),
+              'Share these details with others to let them join:',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            _buildInfoBox('Room ID', roomId),
-            const SizedBox(height: 12),
-            _buildInfoBox('Secret Word', secretWord),
+            _buildDetailRow('Room ID', roomId),
+            const SizedBox(height: 8),
+            _buildDetailRow('Secret Word', secretWord),
             const SizedBox(height: 16),
-            const Text(
-              '⚠️ Keep the secret word private',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppTheme.warningColor,
-                fontWeight: FontWeight.w600,
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade200),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.warning, color: Colors.orange, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Save these details! You\'ll need them to share with others.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -112,82 +138,66 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
         actions: [
           TextButton(
             onPressed: () {
-              final invite = 'Join my Confession room!\n\nRoom ID: $roomId\nSecret Word: $secretWord';
-              Share.share(invite);
-            },
-            child: const Text('Share Invite'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              Navigator.of(context).pushReplacement(
-                MaterialPageRoute(
-                  builder: (context) => ChatScreen(roomId: roomId),
-                ),
+              Clipboard.setData(
+                ClipboardData(text: 'Room ID: $roomId\nSecret Word: $secretWord'),
+              );
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied to clipboard!')),
               );
             },
-            child: const Text('Open Room'),
+            child: const Text('Copy'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.accent,
+            ),
+            child: const Text('Got It!', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildInfoBox(String label, String value) {
+  Widget _buildDetailRow(String label, String value) {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppTheme.background,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Text(
+            label,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: 14,
+            ),
+          ),
+          Row(
             children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppTheme.textColor,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 4),
               Text(
                 value,
                 style: const TextStyle(
-                  fontSize: 16,
-                  color: AppTheme.textColor,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  fontFamily: 'monospace',
                 ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: value));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('$label copied!')),
+                  );
+                },
+                child: const Icon(Icons.copy, size: 16, color: AppTheme.accent),
               ),
             ],
           ),
-          IconButton(
-            icon: const Icon(Icons.copy, size: 20),
-            color: AppTheme.accent,
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: value));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Copied to clipboard'),
-                  duration: Duration(seconds: 1),
-                ),
-              );
-            },
-          ),
         ],
-      ),
-    );
-  }
-
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppTheme.errorColor,
       ),
     );
   }
@@ -195,79 +205,110 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.background,
       appBar: AppBar(
+        backgroundColor: AppTheme.accent,
+        foregroundColor: Colors.white,
         title: const Text('Create Room'),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(24),
         child: Form(
           key: _formKey,
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                  color: AppTheme.accent.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.info_outline, color: AppTheme.accent),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Create a private room and share the details with someone you trust',
-                        style: Theme.of(context).textTheme.bodyMedium,
-                      ),
-                    ),
-                  ],
-                ),
+              const Icon(
+                Icons.add_circle,
+                size: 80,
+                color: AppTheme.accent,
               ),
               const SizedBox(height: 32),
-              Text(
-                'Secret Word',
-                style: Theme.of(context).textTheme.titleLarge,
+              const Text(
+                'Create a New Room',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 8),
-              Text(
-                'Only someone who knows this word can open this chat',
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
-                controller: _secretWordController,
-                decoration: const InputDecoration(
-                  hintText: 'Enter a secret word',
-                  prefixIcon: Icon(Icons.key),
-                ),
-                validator: Validators.validateSecretWord,
-                obscureText: true,
+              const Text(
+                'Set up your private chat room',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey),
               ),
               const SizedBox(height: 32),
+              
+              // Room Name (Optional)
+              TextFormField(
+                controller: _roomNameController,
+                decoration: InputDecoration(
+                  labelText: 'Room Name (Optional)',
+                  hintText: 'e.g., My Secret Room',
+                  prefixIcon: const Icon(Icons.label),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                maxLength: 30,
+              ),
+              const SizedBox(height: 16),
+              
+              // Secret Word (Required)
+              TextFormField(
+                controller: _secretWordController,
+                decoration: InputDecoration(
+                  labelText: 'Secret Word',
+                  hintText: 'Choose a secret word',
+                  prefixIcon: const Icon(Icons.lock),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  helperText: 'Others will need this to join',
+                ),
+                obscureText: true,
+                validator: (value) {
+                  if (value == null || value.isEmpty) {
+                    return 'Please enter a secret word';
+                  }
+                  if (value.length < 4) {
+                    return 'Secret word must be at least 4 characters';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 24),
+              
+              // Disappearing Messages Toggle
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: AppTheme.white,
-                  borderRadius: BorderRadius.circular(20),
+                  color: AppTheme.background,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.shade300),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.timer_outlined, color: AppTheme.accent2),
+                    const Icon(Icons.timer, color: AppTheme.accent),
                     const SizedBox(width: 12),
-                    Expanded(
+                    const Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             'Disappearing Messages',
-                            style: Theme.of(context).textTheme.titleLarge,
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
                           ),
-                          const SizedBox(height: 4),
+                          SizedBox(height: 4),
                           Text(
-                            'Messages delete after 24 hours',
-                            style: Theme.of(context).textTheme.bodySmall,
+                            'Messages auto-delete after 24 hours',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                            ),
                           ),
                         ],
                       ),
@@ -284,14 +325,59 @@ class _CreateRoomScreenState extends State<CreateRoomScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 48),
-              SizedBox(
-                width: double.infinity,
-                child: CustomButton(
-                  text: _isCreating ? 'Creating...' : 'Create Room',
-                  icon: Icons.add_circle,
-                  onPressed: _isCreating ? null : _createRoom,
+              const SizedBox(height: 24),
+              
+              // Info Card
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue.shade200),
                 ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info, color: Colors.blue, size: 20),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'You\'ll receive a Room ID and Secret Word after creation. Share these with others to invite them.',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+              
+              // Create Button
+              ElevatedButton(
+                onPressed: _isLoading ? null : _createRoom,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.accent,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Text(
+                        'Create Room',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
               ),
             ],
           ),
