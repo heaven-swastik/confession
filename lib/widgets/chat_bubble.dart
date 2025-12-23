@@ -1,18 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:intl/intl.dart';
 import '../models/message_model.dart';
 import '../services/auth_service.dart';
-import '../theme/app_theme.dart';
 
 class ChatBubble extends StatefulWidget {
   final MessageModel message;
   final String roomId;
+  final String currentUserId;
+  final List<String> allParticipants;
 
   const ChatBubble({
     super.key,
     required this.message,
     required this.roomId,
+    required this.currentUserId,
+    required this.allParticipants,
   });
 
   @override
@@ -20,44 +24,47 @@ class ChatBubble extends StatefulWidget {
 }
 
 class _ChatBubbleState extends State<ChatBubble> {
-  AudioPlayer? _audioPlayer;
+  final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isPlaying = false;
-  bool _isLoading = false;
+  Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
-  Duration _totalDuration = Duration.zero;
+  bool _isLoading = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.message.type == MessageType.voiceNote) {
-      _initializeAudioPlayer();
+      _setupAudioPlayer();
     }
   }
 
-  void _initializeAudioPlayer() {
-    _audioPlayer = AudioPlayer();
-    _totalDuration = Duration(seconds: widget.message.voiceNoteDuration ?? 0);
-    
-    _audioPlayer!.onPlayerStateChanged.listen((state) {
+  void _setupAudioPlayer() {
+    _audioPlayer.onDurationChanged.listen((d) {
+      if (mounted) {
+        setState(() => _duration = d);
+      }
+    });
+
+    _audioPlayer.onPositionChanged.listen((p) {
+      if (mounted) {
+        setState(() => _position = p);
+      }
+    });
+
+    _audioPlayer.onPlayerStateChanged.listen((state) {
       if (mounted) {
         setState(() {
           _isPlaying = state == PlayerState.playing;
+          _isLoading = state == PlayerState.playing && _duration == Duration.zero;
         });
       }
     });
 
-    _audioPlayer!.onPositionChanged.listen((position) {
+    _audioPlayer.onPlayerComplete.listen((_) {
       if (mounted) {
         setState(() {
-          _position = position;
-        });
-      }
-    });
-
-    _audioPlayer!.onDurationChanged.listen((duration) {
-      if (mounted) {
-        setState(() {
-          _totalDuration = duration;
+          _isPlaying = false;
+          _position = Duration.zero;
         });
       }
     });
@@ -65,215 +72,180 @@ class _ChatBubbleState extends State<ChatBubble> {
 
   @override
   void dispose() {
-    _audioPlayer?.dispose();
+    _audioPlayer.dispose();
     super.dispose();
   }
 
-  Future<void> _playPause() async {
-    if (_audioPlayer == null || widget.message.voiceNoteUrl == null) return;
+  Future<void> _togglePlayPause() async {
+    if (widget.message.voiceNoteUrl == null) return;
 
-    if (_isPlaying) {
-      await _audioPlayer!.pause();
-    } else {
-      setState(() {
-        _isLoading = true;
-      });
-      
-      try {
-        await _audioPlayer!.play(UrlSource(widget.message.voiceNoteUrl!));
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error playing audio: $e')),
-          );
-        }
-      } finally {
-        if (mounted) {
-          setState(() {
-            _isLoading = false;
-          });
+    try {
+      if (_isPlaying) {
+        await _audioPlayer.pause();
+      } else {
+        if (_position == Duration.zero) {
+          await _audioPlayer.play(UrlSource(widget.message.voiceNoteUrl!));
+        } else {
+          await _audioPlayer.resume();
         }
       }
+    } catch (e) {
+      debugPrint('Error playing audio: $e');
     }
   }
 
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
-    final mins = twoDigits(duration.inMinutes.remainder(60));
-    final secs = twoDigits(duration.inSeconds.remainder(60));
-    return '$mins:$secs';
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return '$minutes:$seconds';
+  }
+
+  String _formatTimestamp(DateTime timestamp) {
+    final now = DateTime.now();
+    final difference = now.difference(timestamp);
+
+    if (difference.inDays == 0) {
+      return DateFormat('HH:mm').format(timestamp);
+    } else if (difference.inDays == 1) {
+      return 'Yesterday ${DateFormat('HH:mm').format(timestamp)}';
+    } else if (difference.inDays < 7) {
+      return DateFormat('EEE HH:mm').format(timestamp);
+    } else {
+      return DateFormat('MMM dd, HH:mm').format(timestamp);
+    }
+  }
+
+  // Check if message is read by all other participants
+  bool _isReadByAll() {
+    final otherParticipants = widget.allParticipants
+        .where((id) => id != widget.message.senderId)
+        .toList();
+    
+    if (otherParticipants.isEmpty) return false;
+    
+    return otherParticipants.every((id) => 
+        widget.message.readBy.contains(id)
+    );
+  }
+
+  // Check if message is delivered to all
+  bool _isDeliveredToAll() {
+    final otherParticipants = widget.allParticipants
+        .where((id) => id != widget.message.senderId)
+        .toList();
+    
+    if (otherParticipants.isEmpty) return false;
+    
+    return otherParticipants.every((id) => 
+        widget.message.deliveredTo.contains(id)
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final authService = Provider.of<AuthService>(context);
-    final currentUserId = authService.user?.uid ?? '';
-    final isMe = widget.message.senderId == currentUserId;
+    final isMyMessage = widget.message.senderId == widget.currentUserId;
+    final hasReactions = widget.message.reactions.isNotEmpty;
 
-    return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        child: Column(
-          crossAxisAlignment:
-              isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-          children: [
-            // Message bubble
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isMe ? AppTheme.accent : Colors.white,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(16),
-                  topRight: const Radius.circular(16),
-                  bottomLeft: Radius.circular(isMe ? 16 : 4),
-                  bottomRight: Radius.circular(isMe ? 4 : 16),
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
-                    blurRadius: 4,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: _buildMessageContent(isMe),
-            ),
-            
-            // Timestamp
-            Padding(
-              padding: const EdgeInsets.only(top: 4, left: 12, right: 12),
-              child: Text(
-                _formatTime(widget.message.timestamp),
-                style: TextStyle(
-                  fontSize: 11,
-                  color: Colors.grey[600],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMessageContent(bool isMe) {
-    if (widget.message.type == MessageType.voiceNote) {
-      return _buildVoiceNotePlayer(isMe);
-    }
-
-    // Text message
-    return Text(
-      widget.message.text,
-      style: TextStyle(
-        fontSize: 15,
-        color: isMe ? Colors.white : Colors.black87,
-      ),
-    );
-  }
-
-  Widget _buildVoiceNotePlayer(bool isMe) {
-    final primaryColor = isMe ? Colors.white : AppTheme.accent;
-    final secondaryColor = isMe ? Colors.white70 : Colors.grey[600];
-    final backgroundColor = isMe ? Colors.white.withOpacity(0.2) : AppTheme.background;
-
-    return SizedBox(
-      width: 250,
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment:
+            isMyMessage ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
+          // Show reply preview if this message is a reply
+          if (widget.message.replyToMessageId != null)
+            _buildReplyPreview(isMyMessage),
+
+          // Main message bubble
           Row(
+            mainAxisAlignment:
+                isMyMessage ? MainAxisAlignment.end : MainAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              // Play/Pause button
-              Container(
-                width: 45,
-                height: 45,
-                decoration: BoxDecoration(
-                  color: backgroundColor,
-                  shape: BoxShape.circle,
-                ),
-                child: _isLoading
-                    ? Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          valueColor: AlwaysStoppedAnimation<Color>(primaryColor),
-                        ),
-                      )
-                    : IconButton(
-                        padding: EdgeInsets.zero,
-                        icon: Icon(
-                          _isPlaying ? Icons.pause : Icons.play_arrow,
-                          color: primaryColor,
-                          size: 28,
-                        ),
-                        onPressed: _playPause,
-                      ),
-              ),
-              
-              const SizedBox(width: 12),
-              
-              // Waveform and duration
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // Custom waveform slider
-                    SliderTheme(
-                      data: SliderThemeData(
-                        trackHeight: 3,
-                        thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
-                        overlayShape: RoundSliderOverlayShape(overlayRadius: 10),
-                        activeTrackColor: primaryColor,
-                        inactiveTrackColor: backgroundColor,
-                        thumbColor: primaryColor,
-                        overlayColor: primaryColor.withOpacity(0.2),
-                      ),
-                      child: Slider(
-                        value: _position.inSeconds.toDouble(),
-                        max: _totalDuration.inSeconds.toDouble() > 0 
-                            ? _totalDuration.inSeconds.toDouble() 
-                            : 1,
-                        onChanged: (value) async {
-                          if (_audioPlayer != null) {
-                            await _audioPlayer!.seek(Duration(seconds: value.toInt()));
-                          }
-                        },
-                      ),
+              if (!isMyMessage) ...[
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: const Color(0xFF8B7FD9),
+                  child: Text(
+                    widget.message.senderId[0].toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
                     ),
-                    
-                    // Duration text
-                    Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              Flexible(
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    gradient: isMyMessage
+                        ? const LinearGradient(
+                            colors: [Color(0xFF8B7FD9), Color(0xFF6B5FB5)],
+                          )
+                        : null,
+                    color: isMyMessage ? null : Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topLeft: const Radius.circular(20),
+                      topRight: const Radius.circular(20),
+                      bottomLeft: Radius.circular(isMyMessage ? 20 : 4),
+                      bottomRight: Radius.circular(isMyMessage ? 4 : 20),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.1),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildMessageContent(isMyMessage),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            _formatDuration(_position),
+                            _formatTimestamp(widget.message.timestamp),
                             style: TextStyle(
-                              fontSize: 12,
-                              color: secondaryColor,
+                              fontSize: 11,
+                              color: isMyMessage
+                                  ? Colors.white.withOpacity(0.7)
+                                  : Colors.grey[600],
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                          Text(
-                            _formatDuration(_totalDuration),
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: secondaryColor,
-                              fontWeight: FontWeight.w500,
+                          // BLUE TICK (Read Receipt) - Only show for sent messages
+                          if (isMyMessage) ...[
+                            const SizedBox(width: 4),
+                            Icon(
+                              _isReadByAll() 
+                                  ? Icons.done_all 
+                                  : _isDeliveredToAll()
+                                      ? Icons.done_all
+                                      : Icons.done,
+                              size: 16,
+                              color: _isReadByAll() 
+                                  ? Colors.blue 
+                                  : Colors.white.withOpacity(0.7),
                             ),
-                          ),
+                          ],
                         ],
                       ),
-                    ),
-                  ],
+                      
+                      // REACTIONS - Display below message
+                      if (hasReactions) _buildReactions(isMyMessage),
+                    ],
+                  ),
                 ),
               ),
+              if (isMyMessage) const SizedBox(width: 8),
             ],
           ),
         ],
@@ -281,18 +253,277 @@ class _ChatBubbleState extends State<ChatBubble> {
     );
   }
 
-  String _formatTime(DateTime timestamp) {
-    final now = DateTime.now();
-    final difference = now.difference(timestamp);
+  Widget _buildReactions(bool isMyMessage) {
+    final reactions = widget.message.reactions;
+    if (reactions.isEmpty) return const SizedBox();
 
-    if (difference.inMinutes < 1) {
-      return 'Just now';
-    } else if (difference.inHours < 1) {
-      return '${difference.inMinutes}m ago';
-    } else if (difference.inDays < 1) {
-      return '${difference.inHours}h ago';
-    } else {
-      return '${timestamp.hour}:${timestamp.minute.toString().padLeft(2, '0')}';
+    // Group reactions by emoji
+    final Map<String, List<String>> groupedReactions = {};
+    reactions.forEach((userId, emoji) {
+      if (!groupedReactions.containsKey(emoji)) {
+        groupedReactions[emoji] = [];
+      }
+      groupedReactions[emoji]!.add(userId);
+    });
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: groupedReactions.entries.map((entry) {
+          final emoji = entry.key;
+          final users = entry.value;
+          final count = users.length;
+          final hasCurrentUser = users.contains(widget.currentUserId);
+          
+          return Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: hasCurrentUser 
+                  ? (isMyMessage ? Colors.white.withOpacity(0.3) : const Color(0xFF8B7FD9).withOpacity(0.2))
+                  : (isMyMessage ? Colors.white.withOpacity(0.15) : Colors.grey.withOpacity(0.2)),
+              borderRadius: BorderRadius.circular(12),
+              border: hasCurrentUser 
+                  ? Border.all(
+                      color: isMyMessage ? Colors.white.withOpacity(0.5) : const Color(0xFF8B7FD9),
+                      width: 1.5,
+                    )
+                  : null,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  emoji,
+                  style: const TextStyle(fontSize: 14),
+                ),
+                if (count > 1) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    count.toString(),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: isMyMessage 
+                          ? Colors.white 
+                          : const Color(0xFF8B7FD9),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildReplyPreview(bool isMyMessage) {
+    return Container(
+      margin: EdgeInsets.only(
+        left: isMyMessage ? 60 : 40,
+        right: isMyMessage ? 40 : 60,
+        bottom: 4,
+      ),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: isMyMessage
+            ? Colors.white.withOpacity(0.2)
+            : Colors.grey.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(
+            color: isMyMessage ? Colors.white : const Color(0xFF8B7FD9),
+            width: 3,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.reply,
+                size: 12,
+                color: isMyMessage ? Colors.white : const Color(0xFF8B7FD9),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Replying to',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: isMyMessage ? Colors.white : const Color(0xFF8B7FD9),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            widget.message.replyToText ?? '',
+            style: TextStyle(
+              fontSize: 12,
+              color: isMyMessage
+                  ? Colors.white.withOpacity(0.9)
+                  : Colors.grey[700],
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageContent(bool isMyMessage) {
+    switch (widget.message.type) {
+      case MessageType.voiceNote:
+        return _buildVoiceNotePlayer(isMyMessage);
+
+      case MessageType.spotifyTrack:
+        return _buildSpotifyTrack(isMyMessage);
+
+      default:
+        return Text(
+          widget.message.text,
+          style: TextStyle(
+            fontSize: 15,
+            color: isMyMessage ? Colors.white : const Color(0xFF333333),
+            fontWeight: FontWeight.w500,
+          ),
+        );
     }
+  }
+
+  Widget _buildVoiceNotePlayer(bool isMyMessage) {
+    final totalDuration = widget.message.voiceNoteDuration ?? 0;
+    final progress = _duration.inMilliseconds > 0
+        ? _position.inMilliseconds / _duration.inMilliseconds
+        : 0.0;
+
+    return SizedBox(
+      width: 200,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Play/Pause button
+          GestureDetector(
+            onTap: _togglePlayPause,
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: isMyMessage
+                    ? Colors.white.withOpacity(0.2)
+                    : const Color(0xFF8B7FD9).withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: _isLoading
+                  ? Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          isMyMessage ? Colors.white : const Color(0xFF8B7FD9),
+                        ),
+                      ),
+                    )
+                  : Icon(
+                      _isPlaying ? Icons.pause : Icons.play_arrow,
+                      color: isMyMessage ? Colors.white : const Color(0xFF8B7FD9),
+                      size: 24,
+                    ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          
+          // Progress and duration
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Progress bar
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    backgroundColor: isMyMessage
+                        ? Colors.white.withOpacity(0.3)
+                        : Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      isMyMessage ? Colors.white : const Color(0xFF8B7FD9),
+                    ),
+                    minHeight: 4,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                
+                // Time display
+                Text(
+                  _isPlaying || _position.inSeconds > 0
+                      ? '${_formatDuration(_position)} / ${_formatDuration(_duration.inSeconds > 0 ? _duration : Duration(seconds: totalDuration))}'
+                      : _formatDuration(Duration(seconds: totalDuration)),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isMyMessage
+                        ? Colors.white.withOpacity(0.8)
+                        : Colors.grey[600],
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSpotifyTrack(bool isMyMessage) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.music_note,
+              color: isMyMessage ? Colors.white : Colors.green,
+              size: 20,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                widget.message.spotifyTrackName ?? 'Spotify Track',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: isMyMessage ? Colors.white : const Color(0xFF333333),
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        if (widget.message.spotifyArtistName != null) ...[
+          const SizedBox(height: 2),
+          Text(
+            widget.message.spotifyArtistName!,
+            style: TextStyle(
+              fontSize: 12,
+              color: isMyMessage
+                  ? Colors.white.withOpacity(0.8)
+                  : Colors.grey[600],
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ],
+    );
   }
 }

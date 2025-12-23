@@ -49,6 +49,11 @@ dependencies:
   crypto: ^3.0.3
   http: ^1.2.0
   url_launcher: ^6.2.4
+  youtube_player_iframe: ^5.1.2
+  emoji_picker_flutter: ^2.0.0  # Emoji picker
+  flutter_slidable: ^3.0.1   
+  sensors_plus: ^4.0.0    # Swipe to reply/delete
+  just_audio: ^0.9.36
 
 dev_dependencies:
   flutter_test:

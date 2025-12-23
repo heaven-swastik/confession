@@ -32,10 +32,6 @@ class SettingsScreen extends StatelessWidget {
                           color: AppTheme.accent.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Text(
-                          authService.userModel?.avatarEmoji ?? '😊',
-                          style: const TextStyle(fontSize: 32),
-                        ),
                       ),
                       const SizedBox(width: 16),
                       Expanded(

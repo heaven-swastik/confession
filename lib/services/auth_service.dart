@@ -63,7 +63,7 @@ class AuthService extends ChangeNotifier {
         _userModel = UserModel(
           uid: _user!.uid,
           username: username,
-          avatarEmoji: avatarEmoji,
+         
           createdAt: DateTime.now(),
         );
 
@@ -100,7 +100,7 @@ class AuthService extends ChangeNotifier {
           _userModel = UserModel(
             uid: _user!.uid,
             username: Helpers.generateRandomUsername(),
-            avatarEmoji: Helpers.getRandomEmoji(),
+           
             createdAt: DateTime.now(),
           );
           await firestoreService.createUser(_userModel!);

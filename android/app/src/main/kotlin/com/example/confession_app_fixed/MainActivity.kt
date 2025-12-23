@@ -9,9 +9,8 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
 
         // 🔒 Strictly block screenshots & screen recording
-        window.setFlags(
-            WindowManager.LayoutParams.FLAG_SECURE,
-            WindowManager.LayoutParams.FLAG_SECURE
-        )
+
+
+
     }
 }

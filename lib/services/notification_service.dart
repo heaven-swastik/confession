@@ -1,8 +1,13 @@
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class NotificationService {
+  NotificationService._internal();
+  static final NotificationService instance =
+      NotificationService._internal();
+
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _localNotifications =
       FlutterLocalNotificationsPlugin();
@@ -10,101 +15,121 @@ class NotificationService {
   String? _fcmToken;
   String? get fcmToken => _fcmToken;
 
+  /// 🔔 Call this ONCE from main()
   Future<void> initialize() async {
     try {
-      // Request permission
+      await _requestPermission();
+      await _setupLocalNotifications();
+      await _setupFCM();
+    } catch (e) {
+      debugPrint('❌ Notification init error: $e');
+    }
+  }
+
+  /// =============================
+  /// 🔐 PERMISSIONS
+  /// =============================
+  Future<void> _requestPermission() async {
+    if (Platform.isAndroid || Platform.isIOS) {
       final settings = await _messaging.requestPermission(
         alert: true,
         badge: true,
         sound: true,
-        provisional: false,
       );
 
-      if (settings.authorizationStatus == AuthorizationStatus.authorized) {
-        debugPrint('Notification permission granted');
-      } else {
-        debugPrint('Notification permission denied');
-        return;
-      }
-
-      // Get FCM token
-      _fcmToken = await _messaging.getToken();
-      debugPrint('FCM Token: $_fcmToken');
-
-      // Initialize local notifications
-      await _initializeLocalNotifications();
-
-      // Listen to token refresh
-      _messaging.onTokenRefresh.listen((newToken) {
-        _fcmToken = newToken;
-        debugPrint('FCM Token refreshed: $newToken');
-      });
-
-      // Handle foreground messages
-      FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
-
-      // Handle background messages
-      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
-      // Handle notification taps when app is in background/terminated
-      FirebaseMessaging.onMessageOpenedApp.listen(_handleNotificationTap);
-
-      // Check if app was opened from a notification
-      final initialMessage = await _messaging.getInitialMessage();
-      if (initialMessage != null) {
-        _handleNotificationTap(initialMessage);
-      }
-    } catch (e) {
-      debugPrint('Error initializing notifications: $e');
+      debugPrint(
+        '🔔 Permission: ${settings.authorizationStatus}',
+      );
     }
   }
 
-  Future<void> _initializeLocalNotifications() async {
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosSettings = DarwinInitializationSettings();
+  /// =============================
+  /// 🔧 LOCAL NOTIFICATIONS
+  /// =============================
+  Future<void> _setupLocalNotifications() async {
+    const androidInit = AndroidInitializationSettings(
+      '@mipmap/ic_launcher',
+    );
+
+    const iosInit = DarwinInitializationSettings();
+
     const initSettings = InitializationSettings(
-      android: androidSettings,
-      iOS: iosSettings,
+      android: androidInit,
+      iOS: iosInit,
     );
 
     await _localNotifications.initialize(
       initSettings,
-      onDidReceiveNotificationResponse: (details) {
-        debugPrint('Notification tapped: ${details.payload}');
+      onDidReceiveNotificationResponse: (response) {
+        debugPrint('🟢 Notification tapped: ${response.payload}');
       },
     );
   }
 
-  Future<void> _handleForegroundMessage(RemoteMessage message) async {
-    debugPrint('Foreground message: ${message.notification?.title}');
+  /// =============================
+  /// ☁️ FCM SETUP
+  /// =============================
+  Future<void> _setupFCM() async {
+    _fcmToken = await _messaging.getToken();
+    debugPrint('🔥 FCM Token: $_fcmToken');
 
-    // Show local notification when app is in foreground
-    if (message.notification != null) {
-      await showLocalNotification(
-        title: message.notification!.title ?? 'New Message',
-        body: message.notification!.body ?? '',
-        payload: message.data.toString(),
-      );
+    _messaging.onTokenRefresh.listen((token) {
+      _fcmToken = token;
+      debugPrint('🔄 Token refreshed: $token');
+    });
+
+    /// Foreground messages
+    FirebaseMessaging.onMessage.listen(_onForegroundMessage);
+
+    /// When user taps notification (background)
+    FirebaseMessaging.onMessageOpenedApp.listen(_onNotificationTap);
+
+    /// When app opened from terminated state
+    final initialMessage = await _messaging.getInitialMessage();
+    if (initialMessage != null) {
+      _onNotificationTap(initialMessage);
     }
   }
 
-  void _handleNotificationTap(RemoteMessage message) {
-    debugPrint('Notification tapped: ${message.data}');
-    // TODO: Navigate to specific room/chat based on message.data
+  /// =============================
+  /// 📩 MESSAGE HANDLERS
+  /// =============================
+  Future<void> _onForegroundMessage(RemoteMessage message) async {
+    debugPrint('📩 Foreground message received');
+
+    if (message.notification == null) return;
+
+    await showLocalNotification(
+      title: message.notification!.title ?? 'New Message',
+      body: message.notification!.body ?? '',
+      payload: message.data.toString(),
+    );
   }
 
+  void _onNotificationTap(RemoteMessage message) {
+    debugPrint('👉 Notification tapped');
+    debugPrint('📦 Data: ${message.data}');
+
+    // TODO: Navigate to room/chat if needed
+    // Example: roomId = message.data['roomId']
+  }
+
+  /// =============================
+  /// 🔊 SHOW LOCAL NOTIFICATION
+  /// =============================
   Future<void> showLocalNotification({
     required String title,
     required String body,
     String? payload,
   }) async {
     const androidDetails = AndroidNotificationDetails(
-      'confession_messages',
-      'Messages',
-      channelDescription: 'Notifications for new messages',
-      importance: Importance.high,
+      'confession_channel',
+      'Confession Notifications',
+      channelDescription: 'Chat & room notifications',
+      importance: Importance.max,
       priority: Priority.high,
-      showWhen: true,
+      playSound: true,
+      enableVibration: true,
     );
 
     const iosDetails = DarwinNotificationDetails(
@@ -127,35 +152,16 @@ class NotificationService {
     );
   }
 
-  Future<void> subscribeToTopic(String topic) async {
-    try {
-      await _messaging.subscribeToTopic(topic);
-      debugPrint('Subscribed to topic: $topic');
-    } catch (e) {
-      debugPrint('Error subscribing to topic: $e');
-    }
-  }
-
-  Future<void> unsubscribeFromTopic(String topic) async {
-    try {
-      await _messaging.unsubscribeFromTopic(topic);
-      debugPrint('Unsubscribed from topic: $topic');
-    } catch (e) {
-      debugPrint('Error unsubscribing from topic: $e');
-    }
-  }
-
+  /// =============================
+  /// 📢 TOPICS
+  /// =============================
   Future<void> subscribeToRoom(String roomId) async {
-    await subscribeToTopic('room_$roomId');
+    await _messaging.subscribeToTopic('room_$roomId');
+    debugPrint('✅ Subscribed to room_$roomId');
   }
 
   Future<void> unsubscribeFromRoom(String roomId) async {
-    await unsubscribeFromTopic('room_$roomId');
+    await _messaging.unsubscribeFromTopic('room_$roomId');
+    debugPrint('❌ Unsubscribed from room_$roomId');
   }
-}
-
-// Background message handler (must be top-level function)
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  debugPrint('Background message: ${message.notification?.title}');
 }

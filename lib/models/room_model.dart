@@ -7,10 +7,9 @@ class RoomModel {
   final bool disappearingMessages;
   final String? lastMessage;
   final DateTime? lastMessageTime;
-  final Map<String, String>? gamePlayerAssignments; // userId -> player role (A, B, C, etc.)
   final String? activeGameId;
-  final Map<String, dynamic>? gameState;
-  final Map<String, dynamic>? activeGame;
+  final String? activeGameType;
+
 
   RoomModel({
     required this.roomId,
@@ -21,10 +20,8 @@ class RoomModel {
     this.disappearingMessages = false,
     this.lastMessage,
     this.lastMessageTime,
-    this.gamePlayerAssignments,
     this.activeGameId,
-    this.gameState,
-    this.activeGame,
+    this.activeGameType,
   });
 
   factory RoomModel.fromMap(Map<String, dynamic> map, String roomId) {
@@ -37,14 +34,8 @@ class RoomModel {
       disappearingMessages: map['disappearingMessages'] ?? false,
       lastMessage: map['lastMessage'],
       lastMessageTime: map['lastMessageTime']?.toDate(),
-      gamePlayerAssignments: map['gamePlayerAssignments'] != null
-          ? Map<String, String>.from(map['gamePlayerAssignments'])
-          : null,
       activeGameId: map['activeGameId'],
-      activeGame: map['activeGame'],
-      gameState: map['gameState'] != null
-          ? Map<String, dynamic>.from(map['gameState'])
-          : null,
+      activeGameType: map['activeGameType'],
     );
   }
 
@@ -57,10 +48,8 @@ class RoomModel {
       'disappearingMessages': disappearingMessages,
       'lastMessage': lastMessage,
       'lastMessageTime': lastMessageTime,
-      'gamePlayerAssignments': gamePlayerAssignments,
       'activeGameId': activeGameId,
-      'gameState': gameState,
-      'activeGame': activeGame,
+      'activeGameType': activeGameType,
     };
   }
 
@@ -86,9 +75,7 @@ class RoomModel {
       disappearingMessages: disappearingMessages ?? this.disappearingMessages,
       lastMessage: lastMessage ?? this.lastMessage,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
-      gamePlayerAssignments: gamePlayerAssignments ?? this.gamePlayerAssignments,
-      activeGameId: activeGameId ?? this.activeGameId,
-      gameState: gameState ?? this.gameState,
+
     );
   }
 }

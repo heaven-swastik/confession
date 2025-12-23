@@ -5,15 +5,12 @@ import 'dart:convert';
 import '../models/user_model.dart';
 import '../models/room_model.dart';
 import '../models/message_model.dart';
-import '../models/game_model.dart';
-import '../screens/game_lobby_screen.dart';
-import '../screens/game_play_screen.dart';
-
 
 class FirestoreService extends ChangeNotifier {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
-  // User operations
+  // ============ USER OPERATIONS ============
+  
   Future<void> createUser(UserModel user) async {
     try {
       await _firestore.collection('users').doc(user.uid).set(user.toMap());
@@ -36,6 +33,19 @@ class FirestoreService extends ChangeNotifier {
     }
   }
 
+  Stream<UserModel?> streamUser(String uid) {
+    return _firestore
+        .collection('users')
+        .doc(uid)
+        .snapshots()
+        .map((doc) {
+      if (doc.exists) {
+        return UserModel.fromMap(doc.data()!, doc.id);
+      }
+      return null;
+    });
+  }
+
   Future<void> updateUser(UserModel user) async {
     try {
       await _firestore.collection('users').doc(user.uid).update(user.toMap());
@@ -54,6 +64,32 @@ class FirestoreService extends ChangeNotifier {
     }
   }
 
+  // ============ ONLINE STATUS ============
+  
+  Future<void> setUserOnline(String uid) async {
+    try {
+      await _firestore.collection('users').doc(uid).update({
+        'isOnline': true,
+        'lastSeen': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Error setting user online: $e');
+    }
+  }
+
+  Future<void> setUserOffline(String uid) async {
+    try {
+      await _firestore.collection('users').doc(uid).update({
+        'isOnline': false,
+        'lastSeen': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      debugPrint('Error setting user offline: $e');
+    }
+  }
+
+  // ============ SPOTIFY ============
+  
   Future<void> updateUserSpotifyTokens({
     required String uid,
     required String accessToken,
@@ -84,7 +120,8 @@ class FirestoreService extends ChangeNotifier {
     }
   }
 
-  // Room operations
+  // ============ ROOM OPERATIONS ============
+  
   String hashSecretWord(String secretWord) {
     final bytes = utf8.encode(secretWord.toLowerCase().trim());
     final digest = sha256.convert(bytes);
@@ -124,22 +161,16 @@ class FirestoreService extends ChangeNotifier {
     required String userId,
   }) async {
     try {
-      debugPrint('Attempting to join room: $roomId');
       final doc = await _firestore.collection('rooms').doc(roomId).get();
       
       if (!doc.exists) {
-        debugPrint('Room does not exist: $roomId');
         return null;
       }
 
       final room = RoomModel.fromMap(doc.data()!, doc.id);
       final secretWordHash = hashSecretWord(secretWord);
-      
-      debugPrint('Stored hash: ${room.secretWordHash}');
-      debugPrint('Entered hash: $secretWordHash');
 
       if (room.secretWordHash != secretWordHash) {
-        debugPrint('Secret word does not match');
         return null;
       }
 
@@ -149,7 +180,6 @@ class FirestoreService extends ChangeNotifier {
         });
       }
 
-      debugPrint('Successfully joined room: $roomId');
       return room;
     } catch (e) {
       debugPrint('Error joining room: $e');
@@ -183,6 +213,19 @@ class FirestoreService extends ChangeNotifier {
     });
   }
 
+  Stream<RoomModel?> getRoomStream(String roomId) {
+    return _firestore
+        .collection('rooms')
+        .doc(roomId)
+        .snapshots()
+        .map((doc) {
+      if (doc.exists) {
+        return RoomModel.fromMap(doc.data()!, doc.id);
+      }
+      return null;
+    });
+  }
+
   Future<void> deleteRoom(String roomId) async {
     try {
       await _firestore.collection('rooms').doc(roomId).delete();
@@ -202,7 +245,6 @@ class FirestoreService extends ChangeNotifier {
     }
   }
 
-  // NEW: Update room name
   Future<void> updateRoomName({
     required String roomId,
     required String newName,
@@ -211,14 +253,281 @@ class FirestoreService extends ChangeNotifier {
       await _firestore.collection('rooms').doc(roomId).update({
         'roomName': newName,
       });
-      debugPrint('Room name updated: $newName');
     } catch (e) {
       debugPrint('Error updating room name: $e');
       rethrow;
     }
   }
 
-  // NEW: Game operations
+  // ============ MESSAGE OPERATIONS WITH REPLY SUPPORT ============
+  
+  Future<String?> sendMessage({
+    required String roomId,
+    required String senderId,
+    required String text,
+    MessageType type = MessageType.text,
+    String? stickerUrl,
+    String? voiceNoteUrl,
+    int? voiceNoteDuration,
+    String? spotifyTrackUri,
+    String? spotifyTrackName,
+    String? spotifyArtistName,
+    String? replyToMessageId,
+    String? replyToText,
+    String? replyToSenderId,
+    MessageType? replyToType,
+  }) async {
+    try {
+      final message = MessageModel(
+        messageId: '',
+        roomId: roomId,
+        senderId: senderId,
+        text: text,
+        timestamp: DateTime.now(),
+        type: type,
+        reactions: {}, // NEW: Initialize empty reactions map
+        readBy: [senderId], // NEW: Sender has read their own message
+        deliveredTo: [senderId], // NEW: Message delivered to sender
+        stickerUrl: stickerUrl,
+        voiceNoteUrl: voiceNoteUrl,
+        voiceNoteDuration: voiceNoteDuration,
+        spotifyTrackUri: spotifyTrackUri,
+        spotifyTrackName: spotifyTrackName,
+        spotifyArtistName: spotifyArtistName,
+        replyToMessageId: replyToMessageId,
+        replyToText: replyToText,
+        replyToSenderId: replyToSenderId,
+        replyToType: replyToType,
+      );
+
+      final docRef = await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .add(message.toMap());
+
+      await _firestore.collection('rooms').doc(roomId).update({
+        'lastMessage': text,
+        'lastMessageTime': message.timestamp,
+      });
+      
+      return docRef.id;
+    } catch (e) {
+      debugPrint('Error sending message: $e');
+      return null;
+    }
+  }
+
+  Future<String?> sendVoiceNote({
+    required String roomId,
+    required String senderId,
+    required String voiceNoteUrl,
+    required int duration,
+    String? replyToMessageId,
+    String? replyToText,
+    String? replyToSenderId,
+    MessageType? replyToType,
+  }) async {
+    try {
+      return await sendMessage(
+        roomId: roomId,
+        senderId: senderId,
+        text: 'Voice note',
+        type: MessageType.voiceNote,
+        voiceNoteUrl: voiceNoteUrl,
+        voiceNoteDuration: duration,
+        replyToMessageId: replyToMessageId,
+        replyToText: replyToText,
+        replyToSenderId: replyToSenderId,
+        replyToType: replyToType,
+      );
+    } catch (e) {
+      debugPrint('Error sending voice note: $e');
+      return null;
+    }
+  }
+
+  Future<void> sendSpotifyTrack({
+    required String roomId,
+    required String senderId,
+    required String trackUri,
+    required String trackName,
+    required String artistName,
+    String? replyToMessageId,
+    String? replyToText,
+    String? replyToSenderId,
+    MessageType? replyToType,
+  }) async {
+    try {
+      await sendMessage(
+        roomId: roomId,
+        senderId: senderId,
+        text: '🎵 $trackName',
+        type: MessageType.spotifyTrack,
+        spotifyTrackUri: trackUri,
+        spotifyTrackName: trackName,
+        spotifyArtistName: artistName,
+        replyToMessageId: replyToMessageId,
+        replyToText: replyToText,
+        replyToSenderId: replyToSenderId,
+        replyToType: replyToType,
+      );
+    } catch (e) {
+      debugPrint('Error sending Spotify track: $e');
+      rethrow;
+    }
+  }
+
+  Stream<List<MessageModel>> getRoomMessages(String roomId) {
+    return _firestore
+        .collection('rooms')
+        .doc(roomId)
+        .collection('messages')
+        .orderBy('timestamp', descending: false)
+        .snapshots()
+        .map((snapshot) {
+      return snapshot.docs
+          .map((doc) => MessageModel.fromMap(doc.data(), doc.id))
+          .toList();
+    });
+  }
+
+  // ============ NEW: REACTION METHODS ============
+  
+  // Add or update a user's reaction to a message
+  Future<void> addReaction({
+    required String roomId,
+    required String messageId,
+    required String userId,
+    required String emoji,
+  }) async {
+    try {
+      await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .doc(messageId)
+          .update({
+        'reactions.$userId': emoji, // Store as map: userId -> emoji
+      });
+    } catch (e) {
+      debugPrint('Error adding reaction: $e');
+      rethrow;
+    }
+  }
+
+  // Remove a user's reaction from a message
+  Future<void> removeReaction({
+    required String roomId,
+    required String messageId,
+    required String userId,
+  }) async {
+    try {
+      await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .doc(messageId)
+          .update({
+        'reactions.$userId': FieldValue.delete(),
+      });
+    } catch (e) {
+      debugPrint('Error removing reaction: $e');
+      rethrow;
+    }
+  }
+
+  // ============ NEW: READ RECEIPT METHODS ============
+  
+  // Mark a single message as read by a user
+  Future<void> markMessageAsRead({
+    required String roomId,
+    required String messageId,
+    required String userId,
+  }) async {
+    try {
+      await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .doc(messageId)
+          .update({
+        'readBy': FieldValue.arrayUnion([userId]),
+      });
+    } catch (e) {
+      debugPrint('Error marking message as read: $e');
+    }
+  }
+
+  // Mark a message as delivered to a user
+  Future<void> markMessageAsDelivered({
+    required String roomId,
+    required String messageId,
+    required String userId,
+  }) async {
+    try {
+      await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .doc(messageId)
+          .update({
+        'deliveredTo': FieldValue.arrayUnion([userId]),
+      });
+    } catch (e) {
+      debugPrint('Error marking message as delivered: $e');
+    }
+  }
+
+  // Mark all messages in a room as read by a user (called when opening chat)
+  Future<void> markAllMessagesAsRead({
+    required String roomId,
+    required String userId,
+  }) async {
+    try {
+      final snapshot = await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .where('senderId', isNotEqualTo: userId) // Not sent by current user
+          .get();
+
+      final batch = _firestore.batch();
+      for (var doc in snapshot.docs) {
+        final message = MessageModel.fromMap(doc.data(), doc.id);
+        if (!message.readBy.contains(userId)) {
+          batch.update(doc.reference, {
+            'readBy': FieldValue.arrayUnion([userId]),
+          });
+        }
+      }
+      await batch.commit();
+    } catch (e) {
+      debugPrint('Error marking all messages as read: $e');
+    }
+  }
+
+  // ============ MESSAGE DELETION ============
+
+  Future<void> deleteMessage({
+    required String roomId,
+    required String messageId,
+  }) async {
+    try {
+      await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('messages')
+          .doc(messageId)
+          .delete();
+    } catch (e) {
+      debugPrint('Error deleting message: $e');
+      rethrow;
+    }
+  }
+
+  // ============ GAME OPERATIONS ============
+  
   Future<void> startGame({
     required String roomId,
     required String gameId,
@@ -230,7 +539,6 @@ class FirestoreService extends ChangeNotifier {
         'gamePlayerAssignments': playerAssignments,
         'gameState': {},
       });
-      debugPrint('Game started: $gameId');
     } catch (e) {
       debugPrint('Error starting game: $e');
       rethrow;
@@ -258,239 +566,81 @@ class FirestoreService extends ChangeNotifier {
         'gamePlayerAssignments': null,
         'gameState': null,
       });
-      debugPrint('Game ended');
     } catch (e) {
       debugPrint('Error ending game: $e');
       rethrow;
     }
   }
 
-  Stream<RoomModel?> getRoomStream(String roomId) {
+  // ============ MUSIC OPERATIONS ============
+  
+  Future<void> updateMusicState({
+    required String roomId,
+    required Map<String, dynamic> musicState,
+  }) async {
+    try {
+      await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('music_state')
+          .doc('current')
+          .set(musicState, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Error updating music state: $e');
+      rethrow;
+    }
+  }
+
+  Future<Map<String, dynamic>?> getMusicState(String roomId) async {
+    try {
+      final doc = await _firestore
+          .collection('rooms')
+          .doc(roomId)
+          .collection('music_state')
+          .doc('current')
+          .get();
+      
+      if (doc.exists) {
+        return doc.data();
+      }
+      return null;
+    } catch (e) {
+      debugPrint('Error getting music state: $e');
+      return null;
+    }
+  }
+
+  Stream<Map<String, dynamic>?> streamMusicState(String roomId) {
     return _firestore
         .collection('rooms')
         .doc(roomId)
+        .collection('music_state')
+        .doc('current')
         .snapshots()
         .map((doc) {
       if (doc.exists) {
-        return RoomModel.fromMap(doc.data()!, doc.id);
+        return doc.data();
       }
       return null;
     });
   }
 
-  // Message operations - COMPLETE WITH ALL PARAMETERS
-  Future<void> sendMessage({
-    required String roomId,
-    required String senderId,
-    required String text,
-    MessageType type = MessageType.text,
-    String? stickerUrl,
-    String? voiceNoteUrl,
-    int? voiceNoteDuration,
-    String? spotifyTrackUri,
-    String? spotifyTrackName,
-    String? spotifyArtistName,
-  }) async {
-    try {
-      final message = MessageModel(
-        messageId: '',
-        roomId: roomId,
-        senderId: senderId,
-        text: text,
-        timestamp: DateTime.now(),
-        type: type,
-        stickerUrl: stickerUrl,
-        voiceNoteUrl: voiceNoteUrl,
-        voiceNoteDuration: voiceNoteDuration,
-        spotifyTrackUri: spotifyTrackUri,
-        spotifyTrackName: spotifyTrackName,
-        spotifyArtistName: spotifyArtistName,
-      );
-
-      await _firestore
-          .collection('rooms')
-          .doc(roomId)
-          .collection('messages')
-          .add(message.toMap());
-
-      await _firestore.collection('rooms').doc(roomId).update({
-        'lastMessage': text,
-        'lastMessageTime': message.timestamp,
-      });
-    } catch (e) {
-      debugPrint('Error sending message: $e');
-      rethrow;
-    }
-  }
-
-  // NEW: Convenience method for voice notes
- Future<void> sendVoiceNote({
-  required String roomId,
-  required String senderId,
-  required String voiceNoteUrl,
-  required int duration,
-}) async {
-  await sendMessage(
-    roomId: roomId,
-    senderId: senderId,
-    text: 'Voice note',
-    type: MessageType.voiceNote,
-    voiceNoteUrl: voiceNoteUrl,
-    voiceNoteDuration: duration,
-  );
-}
-// Start game session
-Future<void> startGameSession({
-  required String roomId,
-  required GameSession gameSession,
-}) async {
-  try {
-    await _firestore.collection('rooms').doc(roomId).update({
-      'activeGame': gameSession.toJson(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-  } catch (e) {
-    debugPrint('Error starting game: $e');
-    rethrow;
-  }
-}
-
-// Update game state
-// Update game state using Map
-Future<void> updateGameStateMap({
-  required String roomId,
-  required Map<String, dynamic> gameState,
-}) async {
-  try {
-    await _firestore.collection('rooms').doc(roomId).update({
-      'gameState': gameState,
-    });
-    debugPrint('Game state updated (Map)');
-  } catch (e) {
-    debugPrint('Error updating game state (Map): $e');
-    rethrow;
-  }
-}
-
-// Update game state using GameSession object
-Future<void> updateGameStateSession({
-  required String roomId,
-  required GameSession gameSession,
-}) async {
-  try {
-    await _firestore.collection('rooms').doc(roomId).update({
-      'activeGame': gameSession.toJson(),
-    });
-    debugPrint('Game state updated (GameSession)');
-  } catch (e) {
-    debugPrint('Error updating game state (GameSession): $e');
-    rethrow;
-  }
-}
-
-// End game (Map version)
-Future<void> endGameMap(String roomId) async {
-  try {
-    await _firestore.collection('rooms').doc(roomId).update({
-      'activeGameId': null,
-      'gamePlayerAssignments': null,
-      'gameState': null,
-    });
-    debugPrint('Game ended (Map)');
-  } catch (e) {
-    debugPrint('Error ending game (Map): $e');
-    rethrow;
-  }
-}
-
-// End game (GameSession version)
-Future<void> endGameSession(String roomId) async {
-  try {
-    await _firestore.collection('rooms').doc(roomId).update({
-      'activeGame': null,
-    });
-    debugPrint('Game ended (GameSession)');
-  } catch (e) {
-    debugPrint('Error ending game (GameSession): $e');
-    rethrow;
-  }
-}
-
-  // NEW: Convenience method for Spotify tracks
-  Future<void> sendSpotifyTrack({
-    required String roomId,
-    required String senderId,
-    required String trackUri,
-    required String trackName,
-    required String artistName,
-  }) async {
-    try {
-      await sendMessage(
-        roomId: roomId,
-        senderId: senderId,
-        text: '🎵 $trackName',
-        type: MessageType.spotifyTrack,
-        spotifyTrackUri: trackUri,
-        spotifyTrackName: trackName,
-        spotifyArtistName: artistName,
-      );
-      debugPrint('Spotify track sent: $trackName');
-    } catch (e) {
-      debugPrint('Error sending Spotify track: $e');
-      rethrow;
-    }
-  }
-
-  Stream<List<MessageModel>> getRoomMessages(String roomId) {
-    return _firestore
-        .collection('rooms')
-        .doc(roomId)
-        .collection('messages')
-        .orderBy('timestamp', descending: false)
-        .snapshots()
-        .map((snapshot) {
-      return snapshot.docs
-          .map((doc) => MessageModel.fromMap(doc.data(), doc.id))
-          .toList();
-    });
-  }
-
-  Future<void> addReaction({
-    required String roomId,
-    required String messageId,
-    required String emoji,
-  }) async {
+  Future<void> clearMusicState(String roomId) async {
     try {
       await _firestore
           .collection('rooms')
           .doc(roomId)
-          .collection('messages')
-          .doc(messageId)
-          .update({'reactionEmoji': emoji});
-    } catch (e) {
-      debugPrint('Error adding reaction: $e');
-      rethrow;
-    }
-  }
-
-  Future<void> deleteMessage({
-    required String roomId,
-    required String messageId,
-  }) async {
-    try {
-      await _firestore
-          .collection('rooms')
-          .doc(roomId)
-          .collection('messages')
-          .doc(messageId)
+          .collection('music_state')
+          .doc('current')
           .delete();
     } catch (e) {
-      debugPrint('Error deleting message: $e');
+      debugPrint('Error clearing music state: $e');
       rethrow;
     }
   }
 
-  // NEW: Username operations
+  // ============ USERNAME OPERATIONS ============
+  
   Future<bool> isUsernameAvailable(String username) async {
     try {
       final result = await _firestore
@@ -516,7 +666,6 @@ Future<void> endGameSession(String roomId) async {
         'uid': uid,
         'createdAt': DateTime.now(),
       });
-      debugPrint('Username reserved: $username');
     } catch (e) {
       debugPrint('Error reserving username: $e');
       rethrow;
@@ -529,7 +678,6 @@ Future<void> endGameSession(String roomId) async {
           .collection('usernames')
           .doc(username.toLowerCase())
           .delete();
-      debugPrint('Username released: $username');
     } catch (e) {
       debugPrint('Error releasing username: $e');
       rethrow;
